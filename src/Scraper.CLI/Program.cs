@@ -1,15 +1,68 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Tasks;
 using AngleSharp;
 using AngleSharp.Dom;
 using AngleSharp.Html.Dom;
+using AngleSharp.Html.Parser;
 
 namespace Scraper.CLI
 {
     record StateInformation(string Capital, string State, string Url);
+
+    public class DocumentLoader : IDisposable
+    {
+        private readonly BrowsingContext _browsingContext;
+        private readonly string _cacheFolder;
+        private readonly HtmlParser _parser;
+
+        public DocumentLoader(BrowsingContext browsingContext)
+        {
+            _browsingContext = browsingContext;
+            _cacheFolder = Path.GetDirectoryName(typeof(Program).Assembly.Location);
+            _parser = new HtmlParser(new HtmlParserOptions());
+        }
+
+        public async Task<IDocument> OpenAsync(string url)
+        {
+            var localFileUri = GetLocalFileUri(url);
+            if (File.Exists(localFileUri))
+                return await GetCachedDocument(localFileUri);
+
+            var document = await _browsingContext.OpenAsync(url);
+            var directoryInfo = new DirectoryInfo(Path.GetDirectoryName(localFileUri));
+            if (!directoryInfo.Exists)
+            {
+                // ensure nested path creation
+                directoryInfo.Create();
+            }
+            
+            await File.WriteAllTextAsync(localFileUri, document.Source.Text);
+            return document;
+        }
+
+        private async Task<IDocument> GetCachedDocument(string localFileUri)
+        {
+            return await _parser.ParseDocumentAsync(localFileUri);
+        }
+
+        private string GetLocalFileUri(string url)
+        {
+            var fileHash = Convert.ToBase64String(Encoding.UTF8.GetBytes(url));
+            var fullPath = Path.Combine(_cacheFolder, "cache", $"hash-{fileHash}.html");
+            return fullPath;
+        }
+
+        public void Dispose()
+        {
+            ((IDisposable)_browsingContext)?.Dispose();
+        }
+    }
     
     class Program
     {
@@ -19,18 +72,19 @@ namespace Scraper.CLI
                 .WithDefaultLoader()
                 .WithCulture("de-DE");
             
-            using var context = new BrowsingContext(configuration);
+            using var browsingContext = new BrowsingContext(configuration);
+            using var documentLoader = new DocumentLoader(browsingContext);
             var url = "https://en.wikipedia.org/wiki/States_of_Germany";
-            var page = await GetPageDocumentAsync(context, url);
+            var page = await GetPageDocumentAsync(documentLoader, url);
             
-            await ProcessPageAsync(page, context);
+            await ProcessPageAsync(page, documentLoader);
 
             Console.WriteLine("Process complete");
             
             return 0;
         }
 
-        private static async Task ProcessPageAsync(IDocument page, BrowsingContext browsingContext)
+        private static async Task ProcessPageAsync(IDocument page, DocumentLoader browsingContext)
         {
             var iterations = 1;
             using (new Measure($"Processing page {iterations} times"))
@@ -52,7 +106,7 @@ namespace Scraper.CLI
             }
         }
 
-        private static async Task<StateInformation> GetStateInformationAsync(string url, BrowsingContext browsingContext)
+        private static async Task<StateInformation> GetStateInformationAsync(string url, DocumentLoader browsingContext)
         {
             using (new Measure($"State information for {url}"))
             {
@@ -79,7 +133,7 @@ namespace Scraper.CLI
             }
         }
 
-        private static async Task<IDocument> GetPageDocumentAsync(BrowsingContext context, string url)
+        private static async Task<IDocument> GetPageDocumentAsync(DocumentLoader context, string url)
         {
             using (new Measure($"Loading page {url}"))
             {
