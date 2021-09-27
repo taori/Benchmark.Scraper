@@ -15,21 +15,45 @@ namespace Scraper.CLI
 {
     record StateInformation(string Capital, string State, string Url);
 
+    public class UrlRewriteHelper 
+    {
+        private readonly Dictionary<string, string> _urlReplacements;
+
+        public UrlRewriteHelper(Dictionary<string, string> urlReplacements)
+        {
+            _urlReplacements = urlReplacements;
+        }
+
+        public string Rewrite(string url)
+        {
+            foreach (var replacement in _urlReplacements)
+            {
+                if (url.Contains(replacement.Key))
+                    url = url.Replace(replacement.Key, replacement.Value);
+            }
+
+            return url;
+        }
+    }
     public class DocumentLoader : IDisposable
     {
         private readonly BrowsingContext _browsingContext;
+        private readonly UrlRewriteHelper _urlHelper;
         private readonly string _cacheFolder;
         private readonly HtmlParser _parser;
 
-        public DocumentLoader(BrowsingContext browsingContext)
+        public DocumentLoader(BrowsingContext browsingContext, UrlRewriteHelper urlHelper)
         {
             _browsingContext = browsingContext;
+            _urlHelper = urlHelper;
             _cacheFolder = Path.GetDirectoryName(typeof(Program).Assembly.Location);
             _parser = new HtmlParser(new HtmlParserOptions());
         }
 
         public async Task<IDocument> OpenAsync(string url)
         {
+            url = _urlHelper.Rewrite(url);
+            
             var localFileUri = GetLocalFileUri(url);
             if (File.Exists(localFileUri))
                 return await GetCachedDocument(localFileUri);
@@ -48,7 +72,10 @@ namespace Scraper.CLI
 
         private async Task<IDocument> GetCachedDocument(string localFileUri)
         {
-            return await _parser.ParseDocumentAsync(localFileUri);
+            using (var streamReader = new FileStream(localFileUri, FileMode.Open, FileAccess.Read))
+            {
+                return await _parser.ParseDocumentAsync(streamReader);
+            }
         }
 
         private string GetLocalFileUri(string url)
@@ -73,18 +100,23 @@ namespace Scraper.CLI
                 .WithCulture("de-DE");
             
             using var browsingContext = new BrowsingContext(configuration);
-            using var documentLoader = new DocumentLoader(browsingContext);
+            var rewriteHelper = new UrlRewriteHelper(new Dictionary<string, string>()
+            {
+                { "about:///", "https://en.wikipedia.org/" }
+            });
+            
+            using var documentLoader = new DocumentLoader(browsingContext, rewriteHelper);
             var url = "https://en.wikipedia.org/wiki/States_of_Germany";
             var page = await GetPageDocumentAsync(documentLoader, url);
             
-            await ProcessPageAsync(page, documentLoader);
+            await ProcessPageAsync(page, documentLoader, rewriteHelper);
 
             Console.WriteLine("Process complete");
             
             return 0;
         }
 
-        private static async Task ProcessPageAsync(IDocument page, DocumentLoader browsingContext)
+        private static async Task ProcessPageAsync(IDocument page, DocumentLoader browsingContext, UrlRewriteHelper urlRewriteHelper)
         {
             var iterations = 1;
             using (new Measure($"Processing page {iterations} times"))
@@ -92,7 +124,7 @@ namespace Scraper.CLI
                 for (int i = 0; i < iterations; i++)
                 {
                     var stateUrls = GetStatePageLinks(page)
-                        .Select(d => d.Href)
+                        .Select(d => urlRewriteHelper.Rewrite(d.Href))
                         .ToArray();
                     
                     var informations = stateUrls.Select(url => GetStateInformationAsync(url, browsingContext)).ToArray();
@@ -108,8 +140,8 @@ namespace Scraper.CLI
 
         private static async Task<StateInformation> GetStateInformationAsync(string url, DocumentLoader browsingContext)
         {
-            using (new Measure($"State information for {url}"))
-            {
+            // using (new Measure($"State information for {url}"))
+            // {
                 var subPage = await GetPageDocumentAsync(browsingContext, url);
                 var stateName = subPage.QuerySelector("h1").Text();
                 var tableHeaders = subPage.QuerySelectorAll("table.infobox th.infobox-label");
@@ -122,7 +154,7 @@ namespace Scraper.CLI
                 {
                     return new StateInformation(capitalHeader.NextSibling.FirstChild.Text(), stateName, url);
                 }
-            }
+            // }
         }
 
         private static IEnumerable<IHtmlAnchorElement> GetStatePageLinks(IDocument page)
@@ -135,10 +167,10 @@ namespace Scraper.CLI
 
         private static async Task<IDocument> GetPageDocumentAsync(DocumentLoader context, string url)
         {
-            using (new Measure($"Loading page {url}"))
-            {
+            // using (new Measure($"Loading page {url}"))
+            // {
                 return await context.OpenAsync(url);
-            }
+            // }
         }
     }
 
