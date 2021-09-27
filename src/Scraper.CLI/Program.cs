@@ -140,21 +140,24 @@ namespace Scraper.CLI
 
         private static async Task<StateInformation> GetStateInformationAsync(string url, DocumentLoader browsingContext)
         {
-            // using (new Measure($"State information for {url}"))
-            // {
+            using (new Measure($"State information for {url}"))
+            {
                 var subPage = await GetPageDocumentAsync(browsingContext, url);
-                var stateName = subPage.QuerySelector("h1").Text();
-                var tableHeaders = subPage.QuerySelectorAll("table.infobox th.infobox-label");
-                var capitalHeader = tableHeaders.FirstOrDefault(d => d.Text().Contains("Capital"));
-                if (capitalHeader == null)
+                using (new Measure("Parsing state information"))
                 {
-                    return new StateInformation("N/A", stateName, url);
+                    var stateName = subPage.QuerySelector("h1").Text();
+                    var tableHeaders = subPage.QuerySelectorAll("table.infobox th.infobox-label");
+                    var capitalHeader = tableHeaders.FirstOrDefault(d => d.Text().Contains("Capital"));
+                    if (capitalHeader == null)
+                    {
+                        return new StateInformation("N/A", stateName, url);
+                    }
+                    else
+                    {
+                        return new StateInformation(capitalHeader.NextSibling.FirstChild.Text(), stateName, url);
+                    }
                 }
-                else
-                {
-                    return new StateInformation(capitalHeader.NextSibling.FirstChild.Text(), stateName, url);
-                }
-            // }
+            }
         }
 
         private static IEnumerable<IHtmlAnchorElement> GetStatePageLinks(IDocument page)
@@ -167,10 +170,10 @@ namespace Scraper.CLI
 
         private static async Task<IDocument> GetPageDocumentAsync(DocumentLoader context, string url)
         {
-            // using (new Measure($"Loading page {url}"))
-            // {
+            using (new Measure($"Loading page {url}"))
+            {
                 return await context.OpenAsync(url);
-            // }
+            }
         }
     }
 
